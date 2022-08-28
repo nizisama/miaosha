@@ -1,0 +1,174 @@
+import json
+import re
+import json
+import time
+import urllib
+
+import pyttsx3 as pyttsx3
+from DecryptLogin import login
+from prettytable import PrettyTable #用来生成表格
+import requests
+
+class TaoBaoBuy:
+    def __init__(self):
+        self.session = self._login_in()
+        self.x = None
+
+    def _login_in(self):
+        lg = login.Login()
+        info,session = lg.taobao()
+        return session
+
+    def buycart(self):
+        url = 'https://cart.taobao.com/cart.htm'
+        headers = {
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
+            'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'none',
+            'sec-fetch-user': '?1',
+            'upgrade-insecure-requests': '1',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'accept-encoding': 'gzip, deflate, br', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'cache-control': 'max-age=0'
+        }
+
+        response = self.session.get(url, headers=headers)
+        response_cart = re.search('try{var firstData = (.*?);}catch', response.text).group(1)
+        response_cart = json.loads(response_cart)  #json转化成字符串
+        user_id = re.search('\|\^taoMainUser:(.*?):\^', response.headers['s_tag']).group(1)
+        return response_cart,user_id
+
+    def _get_cart_info(self,response_cart,user_id):
+        '''
+        :param response_cart: 购物车response
+        :param user_id: 用户自己的id
+        :return: 完整的购物车信息
+        '''
+        sku_infos = {}  #这个是整个购物车信息
+        for index,cart_item in enumerate(response_cart['list']):
+            sku_info = {
+                'title': cart_item['bundles'][0]['orders'][0]['title'],
+                'cart_id': cart_item['bundles'][0]['orders'][0]['cartId'],
+                'cart_params': cart_item['bundles'][0]['orders'][0]['cartActiveInfo']['cartBcParams'],
+                'item_id': cart_item['bundles'][0]['orders'][0]['itemId'],
+                'sku_id': cart_item['bundles'][0]['orders'][0]['skuId'],
+                'seller_id': cart_item['bundles'][0]['orders'][0]['sellerId'],
+                'to_buy_info': cart_item['bundles'][0]['orders'][0]['toBuyInfo'],
+            }
+            sku_infos[str(index)] = sku_info #int转str
+            #下面生成表格
+        cart_table = PrettyTable()
+        cart_table.title = '购物车信息'
+        cart_table.field_names = ['序号', '商品名称']
+        for index,sku in sku_infos.items():
+            cart_table.add_row([index,sku['title']])
+        print(cart_table)
+        return sku_infos
+
+
+    def _show_cart_info(self):
+        response_cart, user_id = self.buycart()  # 拿到回复
+        self.user_id = user_id
+        if not response_cart['success']:
+            raise RuntimeError('登陆失败请重新登陆')
+        if len(response_cart['list']) == 0:
+            raise RuntimeError('购物车不能为空，空的你抢个p')
+        # 遍历购物车，提出各个商品信息
+        self.sku_infos = self._get_cart_info(response_cart, user_id)  # 清洗回复数据，拿到购物车信息
+
+
+
+    def sku_jiesuan(self, info,user_id):
+        # 发送结算请求
+        url = 'https://buy.taobao.com/auction/order/confirm_order.htm?spm=a1z0d.6639537.0.0.undefined'
+        headers = {
+            'cache-control': 'max-age=0', 'upgrade-insecure-requests': '1',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
+            'origin': 'https://cart.taobao.com', 'content-type': 'application/x-www-form-urlencoded',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-user': '?1',
+            'sec-fetch-dest': 'document', 'referer': 'https://cart.taobao.com/',
+            'accept-encoding': 'gzip, deflate, br', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        }
+
+        cart_id, item_id, sku_id, seller_id, cart_params, to_buy_info = info['cart_id'], info['item_id'], info[
+            'sku_id'], info['seller_id'], info['cart_params'], info['to_buy_info']
+
+        data = {
+            'item': f'{cart_id}_{item_id}_1_{sku_id}_{seller_id}_0_0_0_{cart_params}_{urllib.parse.quote(str(to_buy_info))}__0',
+            'buyer_from': 'cart',
+            'source_time': ''.join(str(int(time.time() * 1000)))
+        }
+
+        response = self.session.post(url=url, data=data, headers=headers, verify=False)
+        order_info = re.search('orderData= (.*?);\n</script>', response.text).group(1)
+        order_info = json.loads(order_info)
+        # 发送提交订单请求
+        token = self.session.cookies['_tb_token_']
+        endpoint = order_info['endpoint']
+        data = order_info['data']
+        structure = order_info['hierarchy']['structure']
+        hierarchy = order_info['hierarchy']
+        linkage = order_info['linkage']
+        linkage.pop('url')
+        submitref = order_info['data']['submitOrderPC_1']['hidden']['extensionMap']['secretValue']
+        sparam1 = order_info['data']['submitOrderPC_1']['hidden']['extensionMap']['sparam1']
+        input_charset = order_info['data']['submitOrderPC_1']['hidden']['extensionMap']['input_charset']
+        event_submit_do_confirm = order_info['data']['submitOrderPC_1']['hidden']['extensionMap'][
+            'event_submit_do_confirm']
+        url = f'https://buy.taobao.com/auction/confirm_order.htm?x-itemid={item_id}&x-uid={user_id}&submitref={submitref}&sparam1={sparam1}'
+        data_submit = {}
+        for key, value in data.items():
+            if value.get('submit') == 'true' or value.get('submit'):
+                data_submit[key] = value
+        data = {
+            'action': '/order/multiTerminalSubmitOrderAction',
+            '_tb_token_': token,
+            'event_submit_do_confirm': '1',
+            'praper_alipay_cashier_domain': 'cashierrz54',
+            'input_charset': 'utf-8',
+            'endpoint': urllib.parse.quote(json.dumps(endpoint)),
+            'data': urllib.parse.quote(json.dumps(data_submit)),
+            'hierarchy': urllib.parse.quote(json.dumps({"structure": structure})),
+            'linkage': urllib.parse.quote(json.dumps(linkage))
+        }
+        headers = {
+            'cache-control': 'max-age=0', 'upgrade-insecure-requests': '1', 'origin': 'https://buy.taobao.com',
+            'content-type': 'application/x-www-form-urlencoded',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-user': '?1',
+            'sec-fetch-dest': 'document',
+            'referer': 'https://buy.taobao.com/auction/order/confirm_order.htm?spm=a1z0d.6639537.0.0.undefined',
+            'accept-encoding': 'gzip, deflate, br', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        }
+        response = self.session.post(url, data=data, headers=headers)
+        if response.status_code == 200: return True
+        return False
+
+    def run_main(self):
+        # 下单
+        if not self.x:
+            self.x = input('请输入需要下单的商品序号')
+        info = self.sku_infos[self.x]
+        return self.sku_jiesuan(info, self.user_id)
+
+if __name__ == '__main__':
+    print('欢迎使用nizi之柑蕉炒梨萝柚-秒天秒地就是秒不了单系统')
+    print('前排友情提醒购物车物品越少程序运行越快')
+    print('-------------------------------')
+    taobaobuy = TaoBaoBuy()
+    taobaobuy._show_cart_info()
+    i_time = input('请输入要抢多久，例如要抢购5分钟就输入3600秒\n')
+    target_time = time.time()+int(i_time)
+    while True:
+        if time.time() <= target_time:
+            try:
+                status = taobaobuy.run_main()
+            except KeyError as e:
+                continue
+            if status:
+                pyttsx3.speak('dddd master! mission complate')
+                break
+        else:
+            pyttsx3.speak('dddd master! time out')
+    time = time.time()
