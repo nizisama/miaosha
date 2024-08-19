@@ -76,7 +76,7 @@ class TaoBaoBuy:
 
 
 
-    def sku_jiesuan(self, info,user_id):
+    def sku_jiesuan1(self, info,user_id):
         # 发送结算请求
         url = 'https://buy.taobao.com/auction/order/confirm_order.htm?spm=a1z0d.6639537.0.0.undefined'
         headers = {
@@ -149,7 +149,7 @@ class TaoBaoBuy:
         if not self.x:
             self.x = input('请输入需要下单的商品序号')
         info = self.sku_infos[self.x]
-        return self.sku_jiesuan(info, self.user_id)
+        return self.sku_jiesuan1(info, self.user_id)
 
 if __name__ == '__main__':
     print('欢迎使用nizi之柑蕉炒梨萝柚-秒天秒地就是秒不了单系统')
